@@ -222,7 +222,7 @@ fn read_bmp_header(mut file: &File) -> io::Result<BmpHeader> {
 }
 
 fn main() -> io::Result<()> {
-    let mut file: File = File::open("./assets/Camilleeeee.bmp")?;
+    let mut file: File = File::open("./assets/Elsa.bmp")?;
 
     let grayscale_result: Result<(), io::Error> = generate_grayscale(&mut file);
     grayscale_result?;
@@ -257,14 +257,14 @@ fn generate_grayscale(file: &mut File) -> io::Result<()> {
     // Découper les pixels en chunks mutables de 4096 pixels.
     pixels.par_chunks_mut(4095).for_each(|chunk: &mut [u8]| {
         // Traiter chaque chunk en parallèle sur différents threads.
+
+        // Les chunks sont traités en parallèle et une fois terminés,
+        // tous les pixels auront été convertis en niveaux de gris.
+        // Cela permet d'exploiter plusieurs coeurs CPU pour accélérer
+        // le traitement de façon performante plutôt que pixel par pixel.
+
         convert_to_grayscale(chunk);
     });
-
-    // Les chunks sont traités en parallèle et une fois terminés,
-    // tous les pixels auront été convertis en niveaux de gris.
-
-    // Cela permet d'exploiter plusieurs coeurs CPU pour accélérer
-    // le traitement de façon performante plutôt que pixel par pixel.
 
     // Revenir au début du fichier
     file.seek(SeekFrom::Start(0))?;
