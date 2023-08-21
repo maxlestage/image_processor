@@ -2,7 +2,7 @@
 
 Ce projet implémente un convertisseur d'images BMP en niveaux de gris à l'aide du Langage Rust.
 
-![sample](https://github.com/maxlestage/image_processor/blob/main/assets/title.png)
+![sample](https://github.com/maxlestage/image_processor/blob/master/assets/title.png)
 
 ## Fonctionnalités
 
