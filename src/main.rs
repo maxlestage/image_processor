@@ -1,6 +1,6 @@
 use rayon::prelude::*;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::io::{Seek, SeekFrom};
 use std::time::Instant;
 
@@ -147,7 +147,7 @@ impl BmpHeader {
 }
 
 // Read and parse BMP header
-fn read_bmp_header(mut file: &File) -> io::Result<BmpHeader> {
+fn read_bmp_header(file: &mut BufReader<File>) -> io::Result<BmpHeader> {
     // Crée un tampon de 54 octets pour stocker l'en-tête BMP
     let mut buf: [u8; 54] = [0; 54];
 
@@ -221,16 +221,14 @@ fn read_bmp_header(mut file: &File) -> io::Result<BmpHeader> {
     })
 }
 
-fn main() -> io::Result<()> {
-    let mut file: File = File::open("./assets/Elsa.bmp")?;
+fn main() {
+    let file: File = File::open("./assets/Elsa.bmp").expect("error with file");
+    let mut reader: BufReader<File> = BufReader::new(file);
 
-    let grayscale_result: Result<(), io::Error> = generate_grayscale(&mut file);
-    grayscale_result?;
-
-    Ok(())
+    generate_grayscale(&mut reader).expect("error with generate_grayscale");
 }
 
-fn generate_grayscale(file: &mut File) -> io::Result<()> {
+fn generate_grayscale(file: &mut BufReader<File>) -> io::Result<()> {
     let start: Instant = Instant::now();
     // Lire l'en-tête BMP
     let header: BmpHeader = read_bmp_header(file)?;
@@ -270,7 +268,8 @@ fn generate_grayscale(file: &mut File) -> io::Result<()> {
     file.seek(SeekFrom::Start(0))?;
 
     // Ouvrir le fichier de sortie
-    let mut output: File = File::create("./assets/test5.bmp")?;
+    let mut output: BufWriter<File> = BufWriter::new(File::create("./assets/test.bmp")?);
+    // create("./assets/test5.bmp")?;
 
     // Ecrire l'en-tête
     output.write_all(&header.as_bytes())?;
