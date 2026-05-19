@@ -1,4 +1,4 @@
-use image::{GrayImage, ImageFormat};
+use image::{GrayImage, ImageFormat, RgbImage};
 use rayon::prelude::*;
 use std::error::Error;
 use std::path::Path;
@@ -35,23 +35,49 @@ struct Rgb8 {
     data: Vec<u8>,
 }
 
+// Opération appliquée à l'image.
+#[derive(Clone, Copy)]
+enum Operation {
+    // Conversion en niveaux de gris (moyenne R+G+B).
+    Grayscale,
+    // Effet miroir horizontal (gauche/droite), couleurs conservées.
+    Mirror,
+}
+
+impl Operation {
+    fn parse(s: &str) -> Option<Operation> {
+        match s.to_ascii_lowercase().as_str() {
+            "grayscale" | "gray" | "gris" | "g" => Some(Operation::Grayscale),
+            "mirror" | "miroir" | "m" => Some(Operation::Mirror),
+            _ => None,
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let (input, output) = match (args.next(), args.next()) {
         (Some(input), Some(output)) => (input, output),
         _ => {
-            eprintln!("Usage : image_processor <entrée> <sortie>");
-            eprintln!();
-            eprintln!("Convertit une image en niveaux de gris. Formats d'entrée :");
-            eprintln!("  - raster : PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, etc.");
-            eprintln!("  - RAW    : Canon CR2/CR3, Nikon NEF, Sony ARW, Fuji RAF,");
-            eprintln!("             Adobe DNG, Panasonic RW2, Olympus ORF, etc.");
-            eprintln!("Le format de sortie est déduit de l'extension (PNG par défaut).");
+            print_usage();
             return ExitCode::FAILURE;
         }
     };
 
-    match convert_to_grayscale(&input, &output) {
+    // 3e argument optionnel : l'opération (défaut = niveaux de gris).
+    let operation = match args.next() {
+        None => Operation::Grayscale,
+        Some(mode) => match Operation::parse(&mode) {
+            Some(op) => op,
+            None => {
+                eprintln!("Mode inconnu : « {mode} » (attendu : grayscale | mirror)");
+                print_usage();
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+
+    match process(&input, &output, operation) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("Erreur : {err}");
@@ -60,36 +86,79 @@ fn main() -> ExitCode {
     }
 }
 
-fn convert_to_grayscale(input: &str, output: &str) -> Result<(), Box<dyn Error>> {
+fn print_usage() {
+    eprintln!("Usage : image_processor <entrée> <sortie> [mode]");
+    eprintln!();
+    eprintln!("Modes :");
+    eprintln!("  grayscale  (défaut)  conversion en niveaux de gris");
+    eprintln!("  mirror               effet miroir horizontal (couleurs conservées)");
+    eprintln!();
+    eprintln!("Formats d'entrée :");
+    eprintln!("  - raster : PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, etc.");
+    eprintln!("  - RAW    : Canon CR2/CR3, Nikon NEF, Sony ARW, Fuji RAF,");
+    eprintln!("             Adobe DNG, Panasonic RW2, Olympus ORF, etc.");
+    eprintln!("Le format de sortie est déduit de l'extension (PNG par défaut).");
+}
+
+fn process(input: &str, output: &str, operation: Operation) -> Result<(), Box<dyn Error>> {
     let start = Instant::now();
 
-    let Rgb8 {
-        width,
-        height,
-        data,
-    } = decode_any(input)?;
-    println!("Image décodée : {width}x{height}");
+    let image = decode_any(input)?;
+    println!("Image décodée : {}x{}", image.width, image.height);
 
-    // Conversion en niveaux de gris parallélisée avec rayon : chaque
-    // triplet RGB est réduit à un octet de luminance (moyenne R+G+B).
-    // `par_chunks_exact(3)` + `collect` préservent l'ordre des pixels.
-    let gray: Vec<u8> = data
+    // Format de sortie déduit de l'extension ; PNG par défaut si inconnue.
+    let format = ImageFormat::from_path(output).unwrap_or(ImageFormat::Png);
+
+    let label = match operation {
+        Operation::Grayscale => {
+            to_grayscale(&image)?.save_with_format(output, format)?;
+            "niveaux de gris"
+        }
+        Operation::Mirror => {
+            mirror_horizontal(image)?.save_with_format(output, format)?;
+            "miroir"
+        }
+    };
+
+    println!(
+        "Écrit « {output} » ({format:?}) — {label} — {:?}",
+        start.elapsed()
+    );
+    Ok(())
+}
+
+// Conversion en niveaux de gris parallélisée avec rayon : chaque triplet
+// RGB est réduit à un octet de luminance (moyenne R+G+B).
+// `par_chunks_exact(3)` + `collect` préservent l'ordre des pixels.
+fn to_grayscale(image: &Rgb8) -> Result<GrayImage, Box<dyn Error>> {
+    let gray: Vec<u8> = image
+        .data
         .par_chunks_exact(3)
         .map(|px| ((px[0] as u32 + px[1] as u32 + px[2] as u32) / 3) as u8)
         .collect();
 
-    let img: GrayImage = GrayImage::from_raw(width, height, gray)
-        .ok_or("buffer de pixels incohérent avec les dimensions")?;
+    GrayImage::from_raw(image.width, image.height, gray)
+        .ok_or_else(|| "buffer de pixels incohérent avec les dimensions".into())
+}
 
-    // Format de sortie déduit de l'extension ; PNG par défaut si inconnue.
-    let format = ImageFormat::from_path(output).unwrap_or(ImageFormat::Png);
-    img.save_with_format(output, format)?;
+// Effet miroir horizontal parallélisé avec rayon : chaque ligne est
+// confiée à une tâche (`par_chunks_mut`) et ses pixels (triplets RGB)
+// sont inversés gauche/droite sur place. Les couleurs sont conservées.
+fn mirror_horizontal(mut image: Rgb8) -> Result<RgbImage, Box<dyn Error>> {
+    let row_len = image.width as usize * 3;
 
-    println!(
-        "Écrit « {output} » ({format:?}) en niveaux de gris — {:?}",
-        start.elapsed()
-    );
-    Ok(())
+    image.data.par_chunks_mut(row_len).for_each(|row| {
+        let pixels = row.len() / 3;
+        for i in 0..pixels / 2 {
+            let (left, right) = (i * 3, (pixels - 1 - i) * 3);
+            row.swap(left, right);
+            row.swap(left + 1, right + 1);
+            row.swap(left + 2, right + 2);
+        }
+    });
+
+    RgbImage::from_raw(image.width, image.height, image.data)
+        .ok_or_else(|| "buffer de pixels incohérent avec les dimensions".into())
 }
 
 // Décode n'importe quel format en RGB8 : `image` pour les formats raster
